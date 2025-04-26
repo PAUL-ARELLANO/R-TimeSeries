@@ -98,7 +98,7 @@ for (i in 1:nrow(combinations)) {
   #  seasonal_cycle <- 0.1 + amplitude * sin(2 * pi * ((1:n) / 365 + phase_shift))
   seasonal_cycle <- amplitude * sin(2 * pi * ((1:n) / 365 + phase_shift))
   # Set a random offset between 0.02 and 0.06
-  offset <- runif(1, min = 0.02, max = 0.06)
+  offset <- runif(1, min = 0.001, max = 0.002)
   
   # Shift seasonal cycle so its minimum becomes the random offset
   min_seasonal <- min(seasonal_cycle)
@@ -126,8 +126,9 @@ for (i in 1:nrow(combinations)) {
   # Replace NA values with 0
   ndvi[is.na(ndvi)] <- 0
   
-  # Clip final NDVI values to realistic range [0.1, 1]
-  # ndvi <- pmax(pmin(ndvi, 1), 0)
+  # Clip final NDVI values to realistic range [0, 1]
+  # ndvi <- pmax(pmin(ndvi, 1), 0) # Ensure NDVI values are between 0 and 1 by clamping to 1 and 0.
+  ndvi <- ifelse(ndvi >= 0 & ndvi <= 1, ndvi, NA)
   # ndvi[na_indices] <- 0  # Ensure NAs remain 0
   
   # Build dataframe
