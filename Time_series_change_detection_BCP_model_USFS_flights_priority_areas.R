@@ -5,7 +5,11 @@
 # This script processes NDVI time-series data to detect structural shifts
 # in vegetation trends using Bayesian change-point analysis (`bcp` package).
 # It automates the retrieval, processing, and analysis of multiple CSV files.
-
+#
+# Updated at Jun 14, 2025
+#
+# Paul Arellano, Ph.D.
+#
 # ============================================================
 # 1. Load Required Libraries
 # ============================================================
@@ -14,24 +18,81 @@ library(bcp)  # Bayesian Change-Point Detection
 library(data.table)  # Efficient handling of large datasets
 library(furrr)  # Parallel processing to speed up execution
 library(ggplot2)  # Visualization of detected change points
-library(viridis)  
-library(zoo)
-library(dplyr)  # Load the package
-library(tidyr)  # Load the package
+library(viridis)  # For color palettes in ggplot2
+library(zoo) # For handling time series data where observations do not occur at regular intervals
+library(dplyr)  # This package provides a set of functions for data manipulation
+library(tidyr)  # This package provides functions for reshaping data
+library(readxl)   # For reading Excel files
+library(writexl)  # For writing updated Excel files
+library(stringr)  # For better string handling
 # ============================================================
 # 2. Retrieve NDVI Data Files
 # ============================================================
 
 # Set working directory where CSV files are stored
-setwd("C:/Users/pa589/NAU/TREE_STRESS/TreeStress_detection/MODELS/Synthetic_datasets/Stresses_dataset_28-Apr-25/SUBSET_testing")
-
+#setwd("C:/Users/pa589/NAU/TREE_STRESS/TreeStress_detection/MODELS/Synthetic_datasets/Stresses_dataset_28-Apr-25/SUBSET_testing") # Change this path to your directory where NDVI (or other) indexes are stored.
+#setwd("C:/Users/pa589/NAU/TREE_STRESS/TreeStress_detection/MODELS/Synthetic_datasets/PLANET_NDVI/edited") # This path contains samples extracted from Revanth-Planet weekly time series for specific pixels.
+setwd("C:/Users/pa589/NAU/TREE_STRESS/TreeStress_detection/MODELS/Synthetic_datasets/PLANET_NDVI/3_0/subset") # This path contains samples extracted from Revanth-Planet weekly time series for specific pixels.
 # Retrieve CSV files that start with "NDVI"
-file_list <- list.files(getwd(), pattern = "^NDVI.*\\.csv$", full.names = TRUE)
+file_list <- list.files(getwd(), pattern = "\\.xlsx$", full.names = TRUE)
 print(file_list)
+# ============================================================
+# 2.1. Extract "year" and "date" from the "File" column of each record
+#
+# Function to extract "year" and "date" from the "File" column of each record
+extract_year_date <- function(file_column) {
+  matches <- str_match(file_column, ".*/([0-9]+)/([0-9]+)/[^/]+$")
+  if (!is.na(matches[1])) {
+    year <- as.numeric(matches[2])  # Extract the year (6th segment)
+    date <- as.numeric(matches[3])  # Extract the date (7th segment)
+    return(c(year, date))
+  } else {
+    return(c(NA, NA))  # Handle missing matches
+  }
+}
+
+# Process each file individually and save as CSV
+for (file in file_list) {
+  df <- read_excel(file)  # Read Excel file
+  
+  # Ensure 'File' and 'NDVI' columns exist
+  if (!("File" %in% names(df)) || !("NDVI" %in% names(df))) {
+    print(paste("Skipping file:", file, "- Missing required columns"))
+    next
+  }
+  
+  # Apply extraction function to each row in the 'File' column
+  extracted_values <- t(sapply(df$File, extract_year_date))
+  df$year <- extracted_values[,1]
+  df$date <- extracted_values[,2]
+  
+  # Rename columns
+  colnames(df)[colnames(df) == "NDVI"] <- "ndvi"
+  colnames(df)[colnames(df) == "date"] <- "day"
+  
+  # Keep only required columns: File, ndvi, year, and date
+  df <- df[, c("File", "ndvi", "year", "day")]
+  
+  # Sort by year and date
+  df <- df[order(df$year, df$day), ]  
+  
+  # Save updated file as CSV in the same directory
+  output_file <- file.path(dirname(file), paste0(tools::file_path_sans_ext(basename(file)), "_updated.csv"))
+  write.csv(df, output_file, row.names = FALSE)
+  
+  print(paste("Saved:", output_file))
+}
+
+print("Processing complete. Updated CSV files saved in the same folder.")
 
 # ============================================================
 # 3. Preprocessing NDVI Values
 # ============================================================
+#
+# Retrieve CSV files generated in previous step
+file_list <- list.files(getwd(), pattern = "\\.csv$", full.names = TRUE)
+print(file_list)
+#
 
 # Function to clean and interpolate NDVI values
 preprocess_ndvi <- function(ndvi_series) {
@@ -59,7 +120,6 @@ fit_bcp_model <- function(data) {
   
   # Extract all change points where posterior probability falls within range
   threshold_min <- 0.97
-  threshold_max <- 1
   threshold_max <- 1
   high_prob_indices <- which(bcp_result$posterior.prob > threshold_min & bcp_result$posterior.prob < threshold_max)
   change_points <- data$day[high_prob_indices]
@@ -97,16 +157,24 @@ fit_bcp_model <- function(data) {
 # 5. Process Multiple NDVI Datasets in Parallel
 # ============================================================
 
-# Function to process each file and extract change points
-  process_file <- function(file) {
+process_file <- function(file) {
   data <- fread(file)  # Read dataset
   
-  # Fit BCP model and extract detected change points with probabilities
+  # Ensure NDVI column exists and is non-empty
+  if (!("ndvi" %in% colnames(data))) {
+    print(paste("Skipping file:", file, "- 'ndvi' column missing"))
+    return(NULL)  # Skip this file
+  }
+  
+  if (all(is.na(data$ndvi)) || length(data$ndvi) == 0) {
+    print(paste("Skipping file:", file, "- 'ndvi' column is empty"))
+    return(NULL)  # Skip this file
+  }
+  
+  # Proceed with Bayesian change-point detection
   change_point_data <- fit_bcp_model(data)
   
-  # Store results with filename
   result <- cbind(file = basename(file), change_point_data)
-  
   return(result)
 }
 
@@ -128,29 +196,18 @@ results_df <- results_df[, column_order]
 
 
 # Save results to a CSV file
-write.csv(results_df, "C:/Users/pa589/NAU/TREE_STRESS/TreeStress_detection/MODELS/Synthetic_datasets/bcp_model/results_bcp_model_Synthetic_datasets_28-Apr-25_folder_multiple_change_Points_threshold_097_099_subset_max_probability.csv", row.names = FALSE)
+write.csv(results_df, "C:/Users/pa589/NAU/TREE_STRESS/TreeStress_detection/MODELS/Synthetic_datasets/bcp_model/results_bcp_model_Synthetic_datasets_28-Apr-25_folder_multiple_change_Points_threshold_097_099_subset_max_probability.csv", row.names = FALSE)# Change to the your folder
 
 # Display results
 print(results_df)
 
 # ============================================================
-# 6. Visualization of Results
+# 6. Visualization of Results - Histograms and Cumulative Distribution
 # ============================================================
 
 results_df <- read.csv("C:/Users/pa589/NAU/TREE_STRESS/TreeStress_detection/MODELS/Synthetic_datasets/bcp_model/results_bcp_model_Synthetic_datasets_folder_multiple_change_Points.csv", header = TRUE)
 
-
-# Histogram of detected change points
-#hist_plot_x <- ggplot(results_df, aes(x = x_value)) +
-#  geom_histogram(binwidth = 10, fill = "red", color = "black", alpha = 0.7) +
-#  labs(title = "BCP Model: Histogram of Corresponding X Values",
-#       x = "X Value (Day)", y = "Frequency") +
-#  theme_minimal()
-#print(hist_plot_x)
-#
-# ==============================
-#
-# Create histogram
+# Create histogram of detected change points
 hist_plot <- ggplot(results_df, aes(x = corresponding_change_point)) +
   geom_histogram(binwidth = 0.01, color = "black", fill = "blue", alpha = 0.7) +
   labs(title = "Histogram of the change_points with highest_max_posterior_probability",
@@ -160,32 +217,8 @@ hist_plot <- ggplot(results_df, aes(x = corresponding_change_point)) +
 # Display plot
 print(hist_plot)
 
-
-
-
-
-#
-# Select only the first three change point columns
-change_point_cols <- results_df %>%
-  select(matches("^change_point_[1-3]$"))  # Select columns "change_point_1", "change_point_2", and "change_point_3"
-#  select(matches("^change_point_[1]$"))  # Select columns "change_point_1", "change_point_2", and "change_point_3"
-
-# Reshape data into long format for ggplot
-long_results_df <- change_point_cols %>%
-  pivot_longer(cols = everything(), names_to = "change_point_type", values_to = "x_value")
-
-# Histogram with distinct colors for each change point type
-hist_plot_x <- ggplot(long_results_df, aes(x = x_value, fill = change_point_type)) +
-  geom_histogram(binwidth = 10, color = "black", alpha = 0.7, position = "identity") +
-  scale_fill_viridis_d(option = "plasma") +  # Use Viridis discrete color scale
-  labs(title = "BCP Model: Histogram of First Three Change Points",
-       x = "Change Point (Day)", y = "Frequency", fill = "Change Point Type") +
-  theme_minimal()
-
-print(hist_plot_x)
-
-# Cumulative distribution plot of detected change points
-cumulative_plot <- ggplot(results_df, aes(x = change_point)) +
+# Create a cumulative plot of detected change points
+cumulative_plot <- ggplot(results_df, aes(x = corresponding_change_point)) +
   stat_ecdf(geom = "step", color = "blue") +
   labs(title = "BCP Model: Cumulative Distribution of Change-Point Estimates",
        x = "Change-Point Value", y = "Cumulative Probability") +
